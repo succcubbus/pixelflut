@@ -1,32 +1,54 @@
 use std::io::prelude::*;
-use std::net::*;
+use std::net::TcpStream;
+use std::sync::Arc;
+use std::thread;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+const ip: &str = "151.217.40.82:1234";
+const offset: &str = "OFFSET 800 950";
 
 fn main() -> std::io::Result<()> {
-    let mut tcp = TcpStream::connect("151.217.40.82:1234")?;
+    let start = Instant::now();
+    let data = build_data();
+    let bytes = data.into_bytes();
+    println!("data size: {}KiB", bytes.len() as f64 / 1024.0);
+    println!("took {:?}", start.elapsed());
 
-    tcp.write("SIZE\n".as_bytes())?;
-    let mut buf = [0; 512];
-    tcp.read(&mut buf)?;
-    let response = String::from_utf8_lossy(&buf);
-    println!("res: {}", response);
-
-    for x in 0..1920 {
-        for y in 0..1080 {
-            std::thread::spawn(move || {
-                if let Ok(mut tcp) = TcpStream::connect("151.217.40.82:1234") {
-                    set_pixel(&mut tcp, x, y, 0, 255, 0);
-                }
-            });
-        }
+    for _ in 0..16 {
+        flut(&bytes);
     }
 
-    Ok(())
+    loop {
+        thread::sleep(Duration::from_secs(60));
+    }
 }
 
-fn set_pixel(tcp: &mut TcpStream, x: u16, y: u16, r: u8, g: u8, b: u8) -> std::io::Result<()> {
-    let msg = format!("PX {} {} {:02X}{:02X}{:02X}", x, y, r, g, b);
-    println!("{}", msg);
-    tcp.write(msg.as_bytes())?;
-    tcp.flush()?;
-    Ok(())
+fn build_data() -> String {
+    let r = 255;
+    let g = 0;
+    let b = 192;
+
+    (0..100)
+        .flat_map(|x| (0..100).map(move |y| (x, y)))
+        .map(|(x, y)| format!("PX {} {} {:02X}{:02X}{:02X}\n", x, y, r, g, b))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn flut(data: &Vec<u8>) -> JoinHandle<()> {
+    let mine = data.clone();
+
+    thread::spawn(move || {
+        let mut tcp = TcpStream::connect(ip).unwrap();
+        tcp.write(offset.as_bytes());
+
+        loop {
+            if let Err(e) = tcp.write(&mine) {
+                println!("reconnect");
+                tcp = TcpStream::connect(ip).unwrap();
+                tcp.write(offset.as_bytes());
+            }
+        }
+    })
 }
