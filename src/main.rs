@@ -1,27 +1,17 @@
-use std::io::prelude::*;
-use std::net::TcpStream;
-use std::sync::Arc;
-use std::thread;
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::{io::prelude::*, net::TcpStream, thread, time::Instant};
 
-const ip: &str = "151.217.40.82:1234";
-const offset: &str = "OFFSET 800 950";
+const IP: &str = "127.0.0.1:1234";
+const OFFSET: &str = "OFFSET 800 950";
 
-fn main() -> std::io::Result<()> {
+fn main() {
     let start = Instant::now();
     let data = build_data();
     let bytes = data.into_bytes();
     println!("data size: {}KiB", bytes.len() as f64 / 1024.0);
     println!("took {:?}", start.elapsed());
 
-    for _ in 0..16 {
-        flut(&bytes);
-    }
-
-    loop {
-        thread::sleep(Duration::from_secs(60));
-    }
+    let handles = (0..16).map(|_| flut(&bytes)).collect::<Vec<_>>();
+    handles.into_iter().for_each(|h| h.join().unwrap());
 }
 
 fn build_data() -> String {
@@ -36,18 +26,22 @@ fn build_data() -> String {
         .join("")
 }
 
-fn flut(data: &Vec<u8>) -> JoinHandle<()> {
-    let mine = data.clone();
+fn open_connection() -> TcpStream {
+    let mut tcp = TcpStream::connect(IP).expect("could not connect to flut server");
+    tcp.write_all(OFFSET.as_bytes()).unwrap();
+    tcp
+}
+
+fn flut(data: &[u8]) -> thread::JoinHandle<()> {
+    let mine = data.to_owned();
 
     thread::spawn(move || {
-        let mut tcp = TcpStream::connect(ip).unwrap();
-        tcp.write(offset.as_bytes());
+        let mut tcp = open_connection();
 
         loop {
-            if let Err(e) = tcp.write(&mine) {
+            if tcp.write_all(&mine).is_err() {
                 println!("reconnect");
-                tcp = TcpStream::connect(ip).unwrap();
-                tcp.write(offset.as_bytes());
+                tcp = open_connection();
             }
         }
     })
