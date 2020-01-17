@@ -1,48 +1,77 @@
-use std::{io::prelude::*, net::TcpStream, thread, time::Instant};
+use image::{DynamicImage, GenericImageView, Rgba};
+use rand::{seq::SliceRandom, thread_rng};
+use std::{io, io::prelude::*, net::TcpStream, thread, time::Instant};
 
 const IP: &str = "127.0.0.1:1234";
-const OFFSET: &str = "OFFSET 800 950";
+const OFFSET: &str = "OFFSET 0 0";
 
 fn main() {
-    let start = Instant::now();
-    let data = build_data();
-    let bytes = data.into_bytes();
-    println!("data size: {}KiB", bytes.len() as f64 / 1024.0);
-    println!("took {:?}", start.elapsed());
+    let image = match load_image() {
+        Some(img) => img,
+        None => return,
+    };
 
-    let handles = (0..16).map(|_| flut(&bytes)).collect::<Vec<_>>();
-    handles.into_iter().for_each(|h| h.join().unwrap());
+    for _ in 0..9 {
+        let data = build_commands(&image).into_bytes();
+        thread::spawn(move || try_flut(&data));
+    }
+
+    let data = build_commands(&image).into_bytes();
+    try_flut(&data)
 }
 
-fn build_data() -> String {
-    let r = 255;
-    let g = 0;
-    let b = 192;
+fn load_image() -> Option<DynamicImage> {
+    let image_path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "image.png".to_string());
 
-    (0..100)
-        .flat_map(|x| (0..100).map(move |y| (x, y)))
-        .map(|(x, y)| format!("PX {} {} {:02X}{:02X}{:02X}\n", x, y, r, g, b))
-        .collect::<Vec<_>>()
-        .join("")
-}
-
-fn open_connection() -> TcpStream {
-    let mut tcp = TcpStream::connect(IP).expect("could not connect to flut server");
-    tcp.write_all(OFFSET.as_bytes()).unwrap();
-    tcp
-}
-
-fn flut(data: &[u8]) -> thread::JoinHandle<()> {
-    let mine = data.to_owned();
-
-    thread::spawn(move || {
-        let mut tcp = open_connection();
-
-        loop {
-            if tcp.write_all(&mine).is_err() {
-                println!("reconnect");
-                tcp = open_connection();
-            }
+    match image::open(&image_path) {
+        Ok(img) => Some(img),
+        Err(e) => {
+            println!("could not load {}: {:?}", image_path, e);
+            None
         }
-    })
+    }
+}
+
+fn build_commands(image: &DynamicImage) -> String {
+    let (width, height) = image.dimensions();
+    let mut pixels = (0..width)
+        .flat_map(|x| (0..height).map(move |y| (x, y)))
+        .collect::<Vec<_>>();
+    pixels.shuffle(&mut thread_rng());
+    pixels
+        .iter()
+        .filter_map(|&(x, y)| {
+            let Rgba([r, g, b, a]) = image.get_pixel(x, y);
+            if a > 64 {
+                Some(format!("PX {} {} {:02X}{:02X}{:02X}\n", x, y, r, g, b))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn try_flut(data: &[u8]) {
+    if let Err(e) = flut(data) {
+        println!("could not flut: {:?}", e);
+    }
+}
+
+fn flut(data: &[u8]) -> io::Result<()> {
+    let mut tcp = TcpStream::connect(IP)?;
+    tcp.write_all(OFFSET.as_bytes()).unwrap();
+
+    println!("fluting...");
+    loop {
+        let start = Instant::now();
+        if let Err(e) = tcp.write_all(data) {
+            println!("{:?}, reconnecting", e);
+            tcp = TcpStream::connect(IP)?;
+            tcp.write_all(OFFSET.as_bytes()).unwrap();
+        } else {
+            println!("write took {:?}", start.elapsed());
+        }
+    }
 }

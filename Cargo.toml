@@ -5,3 +5,5 @@ authors = ["kaiser"]
 edition = "2018"
 
 [dependencies]
+rand = "0.7.3"
+image = "0.22.4"
