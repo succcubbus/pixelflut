@@ -1,6 +1,13 @@
 use image::{DynamicImage, GenericImageView, Rgba};
 use rand::{seq::SliceRandom, thread_rng};
-use std::{io, io::prelude::*, net::TcpStream, thread, time::Instant};
+use std::{
+    io,
+    io::prelude::*,
+    net::TcpStream,
+    sync::Arc,
+    thread::{self, JoinHandle},
+    time::Duration,
+};
 
 const IP: &str = "127.0.0.1:1234";
 const OFFSET: &str = "OFFSET 0 0";
@@ -11,13 +18,10 @@ fn main() {
         None => return,
     };
 
-    for _ in 0..9 {
-        let data = build_commands(&image).into_bytes();
-        thread::spawn(move || try_flut(&data));
-    }
-
     let data = build_commands(&image).into_bytes();
-    try_flut(&data)
+    spawn_fluts(data)
+        .into_iter()
+        .for_each(|thread| thread.join().unwrap());
 }
 
 fn load_image() -> Option<DynamicImage> {
@@ -53,10 +57,19 @@ fn build_commands(image: &DynamicImage) -> String {
         .collect()
 }
 
-fn try_flut(data: &[u8]) {
-    if let Err(e) = flut(data) {
-        println!("could not flut: {:?}", e);
-    }
+fn spawn_fluts(data: Vec<u8>) -> Vec<JoinHandle<()>> {
+    let data = Arc::new(data);
+    (0..10).map(|_| spawn_flut(data.clone())).collect()
+}
+
+fn spawn_flut(data: Arc<Vec<u8>>) -> JoinHandle<()> {
+    thread::spawn(move || {
+        // randomize timings up to two seconds
+        thread::sleep(Duration::from_secs_f64(rand::random::<f64>() * 2.0));
+        if let Err(e) = flut(&data) {
+            println!("could not flut: {:?}", e);
+        }
+    })
 }
 
 fn flut(data: &[u8]) -> io::Result<()> {
@@ -65,13 +78,10 @@ fn flut(data: &[u8]) -> io::Result<()> {
 
     println!("fluting...");
     loop {
-        let start = Instant::now();
         if let Err(e) = tcp.write_all(data) {
             println!("{:?}, reconnecting", e);
             tcp = TcpStream::connect(IP)?;
             tcp.write_all(OFFSET.as_bytes()).unwrap();
-        } else {
-            println!("write took {:?}", start.elapsed());
         }
     }
 }
